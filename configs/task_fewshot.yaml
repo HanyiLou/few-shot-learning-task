@@ -1,0 +1,8 @@
+task_type: category_membership
+prompt_mode: json_yes_no
+target_class: class_4
+seed: 13
+attention_check_path: data/raw/check/check.mp4
+video_root: data/raw/video
+index_path: data/metadata/video_index.csv
+trials_path: data/trials/trial_set_v1/trials.jsonl

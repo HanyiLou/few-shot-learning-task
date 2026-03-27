@@ -1,0 +1,7 @@
+backend: mock_procedure_runner
+model_name: qwen2-vl
+notes: replace mock_procedure_runner with a real local or API-backed VLM adapter later
+task_formulation: human-procedure category learning with yes/no testing
+input_format: chat_messages_with_multiple_videos
+prepared_inputs_path: outputs/prepared_inputs.jsonl
+predictions_path: outputs/mock_predictions.jsonl
