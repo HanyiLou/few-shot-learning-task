@@ -8,11 +8,11 @@ from src.evaluation.metrics import compute_accuracy, load_prediction_rows
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate verb prediction JSONL.")
+    parser = argparse.ArgumentParser(description="Evaluate VLM yes/no predictions.")
     parser.add_argument(
         "--predictions",
         type=Path,
-        default=Path("outputs/mock_predictions.jsonl"),
+        default=Path("outputs/predictions.jsonl"),
         help="Input predictions JSONL.",
     )
     parser.add_argument(

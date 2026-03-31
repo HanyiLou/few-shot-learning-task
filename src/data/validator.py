@@ -12,14 +12,8 @@ def validate_trial(trial: Trial) -> None:
         raise ValueError("Only category_membership is supported in the current pipeline")
     if not trial.target_class:
         raise ValueError("target_class is required")
-    if not trial.practice_learning_examples:
-        raise ValueError("practice_learning_examples are required")
-    if not trial.practice_testing_examples:
-        raise ValueError("practice_testing_examples are required")
     if not trial.learning_examples:
         raise ValueError("learning_examples are required")
-    if not trial.review_examples:
-        raise ValueError("review_examples are required")
     if trial.query_example is None:
         raise ValueError("query_example is required")
     if not trial.expected_output_format:

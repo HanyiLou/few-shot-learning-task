@@ -36,10 +36,7 @@ class Trial:
     trial_id: str
     task_type: str
     target_class: str
-    practice_learning_examples: list[TrialVideo] = field(default_factory=list)
-    practice_testing_examples: list[TrialVideo] = field(default_factory=list)
     learning_examples: list[TrialVideo] = field(default_factory=list)
-    review_examples: list[TrialVideo] = field(default_factory=list)
     query_example: TrialVideo | None = None
     candidate_labels: list[str] = field(default_factory=lambda: ["yes", "no"])
     task_instruction: str = ""
@@ -48,14 +45,7 @@ class Trial:
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
-        payload["practice_learning_examples"] = [
-            example.to_dict() for example in self.practice_learning_examples
-        ]
-        payload["practice_testing_examples"] = [
-            example.to_dict() for example in self.practice_testing_examples
-        ]
         payload["learning_examples"] = [example.to_dict() for example in self.learning_examples]
-        payload["review_examples"] = [example.to_dict() for example in self.review_examples]
         payload["query_example"] = self.query_example.to_dict() if self.query_example else None
         return payload
 
@@ -68,7 +58,7 @@ class Prediction:
     predicted_label: str
     raw_response: str
     confidence: str = "unknown"
-    backend: str = "mock"
+    backend: str = "dashscope_api"
     latency_ms: int = 0
 
     def to_dict(self) -> dict[str, Any]:

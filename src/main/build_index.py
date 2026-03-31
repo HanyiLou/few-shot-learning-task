@@ -11,13 +11,13 @@ def main() -> None:
     parser.add_argument(
         "--video-root",
         type=Path,
-        default=Path("data/raw/video"),
+        default=Path("data/processed/video_loop_2p1s"),
         help="Directory that contains class_* video folders.",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("data/metadata/video_index.csv"),
+        default=Path("data/metadata/video_index_loop_2p1s.csv"),
         help="Output CSV path.",
     )
     args = parser.parse_args()

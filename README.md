@@ -1,64 +1,212 @@
 # few-shot-learning-task
-```mermaid
-flowchart TD
+This project runs a learning-only VLM category-membership task based on action videos.
 
-A["当前完整 trial 逻辑"] --> A1["Practice Phase"]
-A1 --> A2["Practice Learning：6 张图片"]
-A2 --> A3["cat / panda / horse 类图片"]
-A1 --> A4["Practice Testing：4 张新图片"]
-A4 --> A5["tiger = yes"]
-A4 --> A6["butterfly / chicken / fish = no"]
-A5 --> A7["让模型先理解 yes/no 规则"]
-A6 --> A7
+The current task definition is:
+- no practice phase
+- no review phase
+- no attention check
+- one session = one `target_class + 3 learning verbs` combination
+- one trial = `6 learning videos -> 1 query video -> yes/no judgment`
 
-A --> B1["Main Experiment"]
-B1 --> B2["先固定一个 target class"]
-B2 --> B3["当前默认：class_4"]
+## Project Structure
 
-B3 --> C1["Learning Phase"]
-C1 --> C2["从 target class 随机选 3 个 verb"]
-C2 --> C3["每个 verb 选 2 个视频"]
-C3 --> C4["共 6 个 learning videos"]
-C4 --> C5["目标：让模型学习 hidden category"]
+- [configs/task_fewshot.yaml](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/configs/task_fewshot.yaml)
+  Main task configuration. This is the file you will usually edit first.
+- [data/metadata/video_index_loop_2p1s.csv](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/data/metadata/video_index_loop_2p1s.csv)
+  Canonical video index.
+- [data/trials/learning_only/trials.jsonl](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/data/trials/learning_only/trials.jsonl)
+  Current batch of generated trials.
+- [data/trials/learning_only/session_state.json](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/data/trials/learning_only/session_state.json)
+  Persistent traversal state for session enumeration.
+- [outputs/prepared_inputs.jsonl](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/outputs/prepared_inputs.jsonl)
+  Prepared multimodal inputs sent to the VLM.
+- [outputs/predictions.jsonl](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/outputs/predictions.jsonl)
+  Raw per-trial VLM predictions.
+- [outputs/session_events.csv](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/outputs/session_events.csv)
+  Human-style long-format session table.
 
-B3 --> D1["Review Phase"]
-D1 --> D2["4 个 class 各抽 1 个视频"]
-D2 --> D3["共 4 个 review videos"]
-D3 --> D4["目标：熟悉后续会看到的动作类型"]
-D4 --> D5["这一阶段不做 yes/no 判断"]
+## Session Logic
 
-B3 --> E1["Testing Phase"]
-E1 --> E2["Positive query"]
-E2 --> E3["从 target class 剩余 2 个 verb 中取视频"]
-E3 --> E4["2 个 verb x 2 个视频 = 4 条 yes"]
+Each session is uniquely defined by:
+- one `target_class`
+- one 3-verb learning combination from that class
 
-E1 --> E5["Negative query"]
-E5 --> E6["从其他 3 个 class 中各选 2 个 verb"]
-E6 --> E7["每个 verb 2 个视频"]
-E7 --> E8["共 12 条 no"]
+There are 4 classes, each with 5 verbs. For each class, the pipeline enumerates all `C(5, 3) = 10` learning-verb combinations.
 
-E1 --> E9["Attention Check"]
-E9 --> E10["加入 check.mp4"]
-E10 --> E11["作为额外 testing trial"]
+So the full session space is:
+- `4 x 10 = 40 sessions`
 
-E4 --> F1["最终每个 query 单独生成 1 条 trial"]
-E8 --> F1
-E11 --> F1
+The pipeline traverses these sessions in a fixed order and keeps the current cursor in `session_state.json`.
 
-F1 --> F2["每条 trial 都带完整上下文"]
-F2 --> F3["practice learning images"]
-F2 --> F4["practice testing images + 正确答案"]
-F2 --> F5["learning videos"]
-F2 --> F6["review videos"]
-F2 --> F7["1 个 query video"]
+This means:
+- you can generate only the next `N` sessions now
+- later runs will continue from where you stopped
+- sessions are not repeated unless you reset the state
 
-F3 --> G1["模型任务"]
-F4 --> G1
-F5 --> G1
-F6 --> G1
-F7 --> G1
+## Main Configuration
 
-G1 --> G2["判断 query 是否属于 learning phase 学到的同一 hidden category"]
-G2 --> G3["输出 only yes / no"]
+Edit [configs/task_fewshot.yaml](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/configs/task_fewshot.yaml) to control the default workflow.
 
+Important fields:
+
+```yaml
+seed: 13
+num_sessions: 1
+state_path: data/trials/learning_only/session_state.json
+video_root: data/processed/video_loop_2p1s
+index_path: data/metadata/video_index_loop_2p1s.csv
+trials_path: data/trials/learning_only/trials.jsonl
+prepared_inputs_path: outputs/prepared_inputs.jsonl
+predictions_path: outputs/predictions.jsonl
+session_events_path: outputs/session_events.csv
+```
+
+The most frequently edited field is:
+
+```yaml
+num_sessions: 1
+```
+
+If you want to process 3 new sessions in the next run, change it to:
+
+```yaml
+num_sessions: 3
+```
+
+## Daily Workflow
+
+### 1. Generate the next batch of sessions
+
+```bash
+PYTHONPATH=. python3 src/main/generate_trials.py
+```
+
+This command:
+- reads `configs/task_fewshot.yaml`
+- reads the current session cursor from `session_state.json`
+- generates the next `num_sessions` sessions
+- writes the resulting trials to `data/trials/learning_only/trials.jsonl`
+- advances the session cursor
+
+### 2. Run the VLM
+
+```bash
+PYTHONPATH=. python3 src/main/run_prompt_baseline.py
+```
+
+This command:
+- reads the current trials file
+- builds the multimodal prompt inputs
+- runs DashScope VLM inference
+- writes `outputs/prepared_inputs.jsonl`
+- writes `outputs/predictions.jsonl`
+- writes `outputs/session_events.csv`
+
+### 3. Evaluate predictions
+
+```bash
+PYTHONPATH=. python3 src/main/evaluate_predictions.py
+```
+
+This computes:
+- accuracy
+- hit rate
+- false alarm rate
+- d-prime
+
+## Resetting Session Traversal
+
+If you want to restart traversal from the beginning of the full 40-session sequence, run:
+
+```bash
+PYTHONPATH=. python3 src/main/generate_trials.py --reset-state
+```
+
+This resets the session cursor and then generates the next batch according to `num_sessions`.
+
+## Output Formats
+
+### `trials.jsonl`
+
+This is the generated experimental material for the current session batch.
+
+Each trial contains:
+- one shared learning block of 6 videos within its session
+- one query video
+- metadata including:
+  - `session_num`
+  - `session_id`
+  - `target_class`
+  - `learning_verbs`
+  - `query_class`
+  - `query_verb`
+  - `gold_label`
+
+### `predictions.jsonl`
+
+Each line stores one testing trial result:
+- `trial_id`
+- `query_video_path`
+- `gold_label`
+- `predicted_label`
+- `raw_response`
+- `confidence`
+- `backend`
+- `latency_ms`
+
+### `session_events.csv`
+
+This file is designed to mirror the human participant data format in session mode.
+
+Each session is stored as:
+- 6 `learning` rows
+- followed by its `testing` rows
+
+Columns:
+- `num`
+- `session_id`
+- `trialNum`
+- `phase`
+- `verb`
+- `file`
+- `class_name`
+- `verb_class`
+- `condition`
+- `rt`
+- `response`
+- `gold_label`
+- `correct`
+- `playCounts`
+- `trial_id`
+
+Notes:
+- `condition` is retained
+- `rt` is stored in milliseconds
+- learning rows have empty `response`, `gold_label`, and `correct`
+- testing rows contain VLM outputs
+
+## Core Scripts
+
+- [src/main/build_index.py](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/src/main/build_index.py)
+  Build the canonical video index.
+- [src/main/generate_trials.py](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/src/main/generate_trials.py)
+  Generate the next batch of sessions.
+- [src/main/run_prompt_baseline.py](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/src/main/run_prompt_baseline.py)
+  Run DashScope VLM inference and export outputs.
+- [src/main/export_session_events.py](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/src/main/export_session_events.py)
+  Export human-style session tables.
+- [src/main/evaluate_predictions.py](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/src/main/evaluate_predictions.py)
+  Compute evaluation metrics.
+
+## Quick Start
+
+If you just want the minimal routine:
+
+1. Edit `num_sessions` in [configs/task_fewshot.yaml](/Users/louhanyi/few-shot%20learning%20task/verb_fewshot_project/configs/task_fewshot.yaml)
+2. Run:
+
+```bash
+PYTHONPATH=. python3 src/main/generate_trials.py
+PYTHONPATH=. python3 src/main/run_prompt_baseline.py
+PYTHONPATH=. python3 src/main/evaluate_predictions.py
 ```

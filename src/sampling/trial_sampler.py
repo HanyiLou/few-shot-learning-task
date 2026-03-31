@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import random
 from collections import defaultdict
 
@@ -10,11 +11,6 @@ from src.sampling.constraints import (
     DEFAULT_TASK_INSTRUCTION,
     DEFAULT_TASK_TYPE,
 )
-from src.sampling.materials import (
-    DEFAULT_ATTENTION_CHECK_PATH,
-    build_practice_learning_examples,
-    build_practice_testing_examples,
-)
 
 
 def _group_by_class_and_verb(records: list[VideoRecord]) -> dict[str, dict[str, list[VideoRecord]]]:
@@ -22,6 +18,25 @@ def _group_by_class_and_verb(records: list[VideoRecord]) -> dict[str, dict[str, 
     for record in records:
         grouped[record.class_name][record.verb].append(record)
     return {class_name: dict(verb_map) for class_name, verb_map in grouped.items()}
+
+
+def build_session_specs(records: list[VideoRecord]) -> list[dict[str, object]]:
+    grouped = _group_by_class_and_verb(records)
+    session_specs: list[dict[str, object]] = []
+    session_num = 1
+    for target_class in sorted(grouped):
+        verbs = sorted(grouped[target_class])
+        for learning_verbs in itertools.combinations(verbs, 3):
+            session_specs.append(
+                {
+                    "session_num": session_num,
+                    "session_id": f"session_{session_num:03d}_{target_class}_{'_'.join(learning_verbs)}",
+                    "target_class": target_class,
+                    "learning_verbs": list(learning_verbs),
+                }
+            )
+            session_num += 1
+    return session_specs
 
 
 def _to_trial_video(record: VideoRecord, phase: str, label: str | None = None) -> TrialVideo:
@@ -50,17 +65,16 @@ def _pick_records(
     return selected
 
 
-def sample_human_procedure_trials(
+def sample_learning_only_trials(
     records: list[VideoRecord],
     target_class: str = "class_4",
     seed: int = 13,
-    include_attention_check: bool = True,
-    attention_check_path: str | None = DEFAULT_ATTENTION_CHECK_PATH,
+    learning_verbs: list[str] | None = None,
+    session_num: int | None = None,
+    session_id: str | None = None,
 ) -> list[Trial]:
     rng = random.Random(seed)
     grouped = _group_by_class_and_verb(records)
-    practice_learning_examples = build_practice_learning_examples()
-    practice_testing_examples = build_practice_testing_examples()
 
     if target_class not in grouped:
         raise ValueError(f"Target class {target_class} not found in records")
@@ -70,25 +84,23 @@ def sample_human_procedure_trials(
     if len(target_verbs) < 5:
         raise ValueError("Expected at least 5 verbs in the target class")
 
-    learning_verbs = rng.sample(target_verbs, 3)
+    if learning_verbs is None:
+        selected_learning_verbs = rng.sample(target_verbs, 3)
+    else:
+        selected_learning_verbs = list(learning_verbs)
+        if len(selected_learning_verbs) != 3:
+            raise ValueError("learning_verbs must contain exactly 3 verbs")
+        missing_verbs = [verb for verb in selected_learning_verbs if verb not in target_verbs]
+        if missing_verbs:
+            raise ValueError(f"learning_verbs not found in {target_class}: {missing_verbs}")
+
     learning_examples: list[TrialVideo] = []
-    for verb in learning_verbs:
+    for verb in selected_learning_verbs:
         selected = _pick_records(rng, grouped[target_class][verb], 2, used_ids)
         learning_examples.extend(_to_trial_video(record, phase="learning") for record in selected)
     rng.shuffle(learning_examples)
 
-    review_examples: list[TrialVideo] = []
-    unused_target_verbs = [verb for verb in target_verbs if verb not in learning_verbs]
-    for class_name in sorted(grouped):
-        if class_name == target_class:
-            selected_verb = rng.choice(unused_target_verbs)
-        else:
-            selected_verb = rng.choice(sorted(grouped[class_name]))
-        selected = _pick_records(rng, grouped[class_name][selected_verb], 1, used_ids)
-        review_examples.extend(_to_trial_video(record, phase="review") for record in selected)
-    rng.shuffle(review_examples)
-
-    positive_verbs = [verb for verb in target_verbs if verb not in learning_verbs]
+    positive_verbs = [verb for verb in target_verbs if verb not in selected_learning_verbs]
     if len(positive_verbs) < 2:
         raise ValueError("Expected at least two held-out target verbs for positive test queries")
 
@@ -105,30 +117,21 @@ def sample_human_procedure_trials(
             selected = _pick_records(rng, grouped[class_name][verb], 2, used_ids)
             query_examples.extend(_to_trial_video(record, phase="testing", label="no") for record in selected)
 
-    if include_attention_check and attention_check_path:
-        query_examples.append(
-            TrialVideo(
-                video_id="attention_check",
-                video_path=attention_check_path,
-                verb="attention_check",
-                class_name="attention_check",
-                phase="testing",
-                label="yes",
-            )
-        )
-
     rng.shuffle(query_examples)
 
     base_metadata = {
         "target_class": target_class,
-        "learning_verbs": learning_verbs,
-        "review_order": [example.video_id for example in review_examples],
+        "learning_verbs": selected_learning_verbs,
         "seed": seed,
-        "human_procedure_aligned": True,
-        "attention_check_included": include_attention_check and bool(attention_check_path),
+        "vlm_learning_only": True,
     }
+    if session_num is not None:
+        base_metadata["session_num"] = session_num
+    if session_id is not None:
+        base_metadata["session_id"] = session_id
 
     trials: list[Trial] = []
+    trial_prefix = session_id if session_id is not None else target_class
     for index, query_example in enumerate(query_examples, start=1):
         metadata = dict(base_metadata)
         metadata["query_index"] = index
@@ -137,13 +140,10 @@ def sample_human_procedure_trials(
         metadata["gold_label"] = query_example.label
         trials.append(
             Trial(
-                trial_id=f"{target_class}_query_{index:02d}_{query_example.video_id}",
+                trial_id=f"{trial_prefix}_query_{index:02d}_{query_example.video_id}",
                 task_type=DEFAULT_TASK_TYPE,
                 target_class=target_class,
-                practice_learning_examples=list(practice_learning_examples),
-                practice_testing_examples=list(practice_testing_examples),
                 learning_examples=list(learning_examples),
-                review_examples=list(review_examples),
                 query_example=query_example,
                 candidate_labels=list(DEFAULT_CANDIDATE_LABELS),
                 task_instruction=DEFAULT_TASK_INSTRUCTION,
